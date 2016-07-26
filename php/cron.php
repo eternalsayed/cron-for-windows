@@ -172,6 +172,14 @@ class Cron
         return $next;
     }
 
+    public function cronSetLog($cronId, $log)
+    {
+        $filename = "logs/cron-$cronId.log";
+        $file = fopen($filename, 'a+');
+        fwrite($file, $log);
+        fclose($file);
+    }
+
     public function cronExecute($cron)
     {
         ob_start();
@@ -193,7 +201,7 @@ class Cron
             echo "\r\n";
         }
         $log = ob_get_flush();
-        self::setCronLog($cron_id, $log);
+        self::cronSetLog($cron_id, $log);
     }
 
     public function getExecutableCron($cron)
@@ -206,14 +214,6 @@ class Cron
             $temp[] = $cron[$i];
         $cron = join(' ', $temp);
         return trim($cron);
-    }
-
-    public function setCronLog($cronId, $log)
-    {
-        $filename = "logs/cron-$cronId.log";
-        $file = fopen($filename, 'a+');
-        fwrite($file, $log);
-        fclose($file);
     }
 
     public function createMappingList($return_new=false)
@@ -270,7 +270,10 @@ class Cron
         $now = date('Y-m-d h:i:s');
         echo "[$now] Cron list started"."\r\n";
         foreach($crons as $id=>$cron)
+        {
             self::cronExecute($cron);
+            self::setCronSchedule($cron);
+        }
         $now = date('Y-m-d h:i:s');
         echo "[$now] Cron list ended"."\r\n";
         $output = ob_get_flush();
