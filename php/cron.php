@@ -4,10 +4,10 @@ class Cron
     static $list, $mappings;
     public function init()
     {
-        self::getMappingList();
+        echo "\r\n".'Cron was not setup. Initializing';
         @mkdir('logs',0777,true);
         @mkdir('data', 0777, true);
-        file_put_contents('data/status.ini', "ts = ".date('Y-m-d h:i:s'));
+        file_put_contents('data/status.ini', '');
         file_put_contents('data/cron-schedule.ini','');
     }
 
@@ -16,9 +16,9 @@ class Cron
         if(!file_exists('data/status.ini'))
             return false;
         $temp = parse_ini_file('data/status.ini');
-        $last = strtotime($temp['ts']);
+        $last = $temp['ts'];
         $current = strtotime(date('Y-m-d h:i:s'));
-        if(strtotime('+1 minute', $last) < $current)//last update over few minutes ago
+        if(strtotime('+2 minute', $last) < $current)//last update over few minutes ago
         {
             @unlink('data/status.ini');
             return false;
@@ -56,18 +56,19 @@ class Cron
 
     public function getScheduledCrons($range='1 minute')
     {
-        $current = date('Y-m-d h:i');
+        $current = date('Y-m-d h:i:s');
         $range = '+'.str_replace('+','', $range);
-        $next = date('Y-m-d h:i',strtotime($range));
-        echo "\r\n".'Getting scheduled crons falling before '.$next.' and '.$current;
+        $next = date('Y-m-d h:i:s',strtotime($range));
+        echo "\r\n".'Getting scheduled crons falling between '.$current.' and '.$next;
         $crons = [];
         if(!count(self::$list))
             return $crons;
         $scheduled = parse_ini_file('data/cron-schedule.ini');
         $scheduled_crons = $scheduled=='' || !count($scheduled) ?[] :$scheduled;
         $mappings = self::getMappingList();
-        foreach($scheduled_crons as $cron_id=>$date)
+        foreach($scheduled_crons as $cron_id=>$ts)
         {
+            $date = date('Y-m-d h:i:s', $ts);
             echo "\r\n".'Cron:'.$cron_id.', Time:'.$date; 
             if($date>=$current && $date<=$next)
                 $crons[$cron_id] = array_search($cron_id, $mappings);
@@ -77,9 +78,9 @@ class Cron
 
     /*
     adds mapped array of cronId and it's next timestep (time at which next execution will occur for this cron) in cron-schedule.ini*/
-    public function setCronSchedule($cron, $completed=false)
+    public function setCronSchedule($cron, $prev_time=null)
     {
-        $next = self::cronGetNextTime($cron, $completed);
+        $next = self::cronGetNextTime($cron, $prev_time);
         $cronId = self::getCronId($cron);
         if($cronId)
         {
@@ -87,7 +88,7 @@ class Cron
             $schedule[$cronId] = $next;
             $str = '';
             foreach($schedule as $cronId=>$ts)
-                $str .= "$cronId = '$ts'"."\r\n";
+                $str .= "$cronId = $ts"."\r\n";
             file_put_contents('data/cron-schedule.ini',$str);
         }
     }
@@ -146,7 +147,7 @@ class Cron
         return $next;
     }
 
-    public function cronGetNextTime($cron, $completed=false)
+    public function cronGetNextTime($cron, $prev_time=null)
     {
         echo "\r\n".'Getting nextSchedule for cron:'.$cron;
         $temp = explode(' ', $cron);
@@ -158,8 +159,7 @@ class Cron
         $time['weekday']    = $temp[4];
         $time['year']       = $temp[5];
 
-        $next = strtotime(date('Y-m-d h:i:'));
-        if($completed) $next = strtotime('+1 minute', $next);
+        $next = $prev_time ?strtotime('+1 minute', $prev_time) :strtotime(date('Y-m-d h:i:s'));
         //for any of the bits, do nothing for JUST recursive bits
         foreach($time as $type=>$bit)
         {
@@ -168,10 +168,10 @@ class Cron
                 $next = self::getTimeFromBit($bit, $type, $next);
             }
         }
-        if(date('Y-m-d h:i', $next) <= date('Y-m-d h:i'))//if $next minute is smaller than current time
-            $next = strtotime('+1 minute', $next);
-        $next = date('Y-m-d h:i:', $next);
-        echo '>Returning next:'.$next;
+        /* if(date('Y-m-d h:i:s', $next) <= date('Y-m-d h:i:s'))//if $next minute is smaller than current time
+            $next = strtotime('+1 minute', $next); */
+        // $next = date('Y-m-d h:i', $next);
+        echo "\r\n".'>Returning next:'.date('Y-m-d h:i:s', $next);
         return $next;
     }
 
@@ -191,10 +191,10 @@ class Cron
         $cron = self::getExecutableCron($cron);
         echo "[$ts] Executing cron: ".$cron."\r\n";
         try{
-            $result = shell_exec($cron);
+            $result = exec($cron);
             $ts = date('Y-m-d h:i:s');
-            echo "[$ts] Cron executed successfully!"."\r\n";
             echo $result."\r\n";
+            echo "[$ts] Cron executed successfully!"."\r\n";
         }
         catch(Exception $e)
         {
@@ -205,6 +205,7 @@ class Cron
         }
         $log = ob_get_flush();
         self::cronSetLog($cron_id, $log);
+        return strtotime(date('Y-m-d h:i:s'));
     }
 
     public function getExecutableCron($cron)
@@ -216,7 +217,10 @@ class Cron
         for($i=5; $i<count($cron); $i++)
             $temp[] = $cron[$i];
         $cron = join(' ', $temp);
-        return trim($cron);
+        $cron = trim($cron);
+        $cron = trim($cron,"'");
+        $cron = trim($cron,"'");
+        return $cron;
     }
 
     public function createMappingList($return_new=false)
@@ -242,13 +246,16 @@ class Cron
     {
         if(!file_exists('data/map.ini'))
         {
+            echo "\r\n".'Mapping file missing. Creating new';
             @mkdir('data',0777,true);
             file_put_contents('data/map.ini','');
         }
-        if(empty(self::$mappings))
+        if(!count(self::$mappings))
         {
+            echo "\r\n".'Mapping list is empty. Getting list from file:';            
             $mappings = parse_ini_file('data/map.ini');
             self::$mappings = !count($mappings) ?[] :$mappings;
+            print_r(self::$mappings);
         }
         return self::$mappings;
     }
@@ -256,7 +263,9 @@ class Cron
     public function run()
     {
         ob_start();
-        if(!self::isRunning()) self::init();
+        if(!self::isRunning()) 
+            self::init();
+        self::getMappingList();
         
         $now = strtotime(date('Y-m-d h:i:s'));
         file_put_contents('data/status.ini', "ts = ".$now);
@@ -264,10 +273,12 @@ class Cron
         $mtime = filemtime('php/crontab.php');
         // echo "\r\n".'Current time:'.$now.', modified time:'.$crons_mtime.': current >'.date('Y-m-d h:i:s', $now).', mtime:'.date('Y-m-d h:i:s', $crons_mtime);
         //cron file updated; add schedule for new crons
-        if(date('Y-m-d h:i:s',strtotime("+1 minute", $mtime)) >= date('Y-m-d h:i:s',$now) || !count(self::$mappings))
+        echo "\r\n".'Mappings list:'."\r\n".print_r(self::$mappings, true);
+        if(date('Y-m-d h:i',strtotime("+1 minute", $mtime)) >= date('Y-m-d h:i',$now) || !count(self::$mappings))
         {
-            $added_crons = self::createMappingList($new=true);
-            echo "\r\n".'added cron:'.print_r($added_crons, true);
+            echo "\r\n".(date('Y-m-d h:i',strtotime("+1 minute", $mtime)) >= date('Y-m-d h:i',$now) ?'Crontab was updated' :'Mappings list was empty');
+            $added_crons = self::createMappingList($get_new=true);
+            echo "\r\n".'Added cron:'.print_r($added_crons, true);
             foreach($added_crons as $cron=>$id)
             {
                 self::setCronSchedule($cron);
@@ -280,8 +291,10 @@ class Cron
         echo "\r\n"."[$now] Cron list started"."\r\n";
         foreach($crons as $id=>$cron)
         {
-            self::cronExecute($cron);
-            self::setCronSchedule($cron, true);
+            $cron = trim($cron,"'");
+            $cron = trim($cron,"'");
+            $prev_time = self::cronExecute($cron);
+            self::setCronSchedule($cron, $prev_time);
         }
         $now = date('Y-m-d h:i:s');
         echo "\r\n"."[$now] Cron list ended"."\r\n";
