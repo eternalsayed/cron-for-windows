@@ -28,10 +28,8 @@ class Cron
 
     public function isRepeativeBit($bit)
     {
-        if(self::isRecursiveBit($bit))
-            $bit = str_replace('*/','', $bit);
-        $bit = preg_replace('/[^0-9]+/','',$bit);
-        return isset($bit[0]) ?$bit[0] :false;
+        $bit = str_replace('*/','', $bit);
+        return preg_match('/[^0-9]+/',$bit) ?false :(int)$bit;
     }
 
     public function isRangeBit($bit, $range_type)
@@ -159,9 +157,10 @@ class Cron
         else if($type=='min')
         {
             $type = 'minute';
-            $current = date('m');//hours, from 0-59
+            $current = date('i');//hours, from 0-59
             $max = 59;
         }
+        $current = (int)$current;
         $type .= 's';//make it plural
         if($range = self::isRangeBit($bit,$type))
         {
@@ -185,8 +184,10 @@ class Cron
             }
             else
             {
-                $ts = $max - $current + $gap;//eg, (7-6)+2 for a alternate bit of */2 and weekday as 6
-                $next = $ts>0 ?strtotime("+$ts $type", $next) :$next;
+                $ts = $max - $current + $gap;
+                echo "\r\n".'Current:'.$current.', gap:'.$gap;
+                $next = strtotime("$ts $type", $next);
+                echo "\r\n".'SPECIFIC bit for '.$type.':'.$ts.', Time:'.date('Y-m-d h:i:s', $next);
             }
         }
         return $next;
