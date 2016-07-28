@@ -112,7 +112,7 @@ class Cron
         $time['weekday']    = $temp[4];
         $time['year']       = $temp[5];
 
-        $next = $prev_ts ?strtotime('+1 minute', $prev_ts) :strtotime(date('Y-m-d h:i:s'));
+        $next = $prev_ts ?$prev_ts :strtotime(date('Y-m-d h:i:s'));
         //for any of the bits, do nothing for JUST recursive bits
         foreach($time as $type=>$bit)
         {
@@ -172,7 +172,7 @@ class Cron
         }
         else if($gap = self::isRepeativeBit($bit))
         {
-            //echo "\r\n".'It was a repeative bit ('.$bit.') for type:'.$type.' '.$gap;
+            // echo "\r\n".'It was a repeative bit ('.$bit.') for type:'.$type.' '.$gap;
             if(self::isRecursiveBit($bit))
             {
                 //echo "\r\n".'Setting next bit for '.$type.':'.($gap>0 ?"+$gap $type to ".date('Y-m-d h:i:s',$next) :'').' >';
@@ -290,7 +290,7 @@ class Cron
     public function run()
     {
         ob_start();
-        echo "[".date('Y-m-d h:i:s')."] Starting cron execution";
+        echo "\r\n"."[".date('Y-m-d h:i:s')."] Starting cron execution";
         if(!self::isRunning()) 
             self::init();
         self::getMappingList();
@@ -306,7 +306,7 @@ class Cron
             $added_crons = self::createMappingList($get_new=true);
             foreach($added_crons as $cron=>$id)
             {
-                self::setCronSchedule($cron, strtotime('-1 minute',$now));
+                self::setCronSchedule($cron, $now);
             }
         }
         $crons = self::getScheduledCrons($now);
