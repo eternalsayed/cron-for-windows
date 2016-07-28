@@ -1,1 +1,1 @@
-schtasks /delete /tn "Crons"
+schtasks /delete /tn "cron-for-windows"

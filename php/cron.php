@@ -26,11 +26,12 @@ class Cron
         return true;
     }
 
-    public function isAlteringBit($bit)
+    public function isRepeativeBit($bit)
     {
         if(self::isRecursiveBit($bit))
             $bit = str_replace('*/','', $bit);
-        return preg_match("~\d+~", $bit)[0];
+        $bit = preg_replace('/[^0-9]+/','',$bit);
+        return isset($bit[0]) ?$bit[0] :false;
     }
 
     public function isRangeBit($bit, $range_type)
@@ -40,7 +41,7 @@ class Cron
         $temp = explode('-', $bit);
         if(count($temp)==2)
         {
-            $valid_ranges = ['weekdays'=>'1-7', 'months'=>'1-12','dates'=>'1-31','hours'=>'0-23','mins'=>'0-59'];
+            $valid_ranges = ['weekdays'=>'0-6', 'months'=>'1-12','dates'=>'1-31','hours'=>'0-23','mins'=>'0-59'];
             $temp[0] = (int)$temp[0];
             $temp[1] = (int)$temp[1];
             $pattern = $valid_ranges[$range_type];
@@ -54,33 +55,41 @@ class Cron
         return $bit[0]=='*';
     }
 
-    public function getScheduledCrons($range='1 minute')
+    public function getScheduledCrons($current_ts, $range='1 minute')
     {
-        $current = date('Y-m-d h:i:s');
+        $current = date('Y-m-d h:i:s', $current_ts);
         $range = '+'.str_replace('+','', $range);
-        $next = date('Y-m-d h:i:s',strtotime($range));
-        echo "\r\n".'Getting scheduled crons falling between '.$current.' and '.$next;
+        $range .= (int)$range[0]<=1 ?'' :'s';
+        $next = date('Y-m-d h:i:s',strtotime($range, $current_ts));
+        echo "\r\n".'Find crons between '.$current.' and '.$next;
         $crons = [];
-        if(!count(self::$list))
-            return $crons;
+        
         $scheduled = parse_ini_file('data/cron-schedule.ini');
         $scheduled_crons = $scheduled=='' || !count($scheduled) ?[] :$scheduled;
+        
         $mappings = self::getMappingList();
         foreach($scheduled_crons as $cron_id=>$ts)
         {
+            $ts = (double)$ts;
             $date = date('Y-m-d h:i:s', $ts);
-            echo "\r\n".'Cron:'.$cron_id.', Time:'.$date; 
+            echo "\r\n".'Checking Cron:'.array_search($cron_id, $mappings).' ['.$cron_id.'], Time:'.$date; 
             if($date>=$current && $date<=$next)
-                $crons[$cron_id] = array_search($cron_id, $mappings);
+            {
+                echo "\r\n".'Cron '.$cron_id.' is falling between this time. Adding it to list';
+                $crons[$cron_id] = $ts;
+            }
         }
         return $crons;
     }
 
     /*
     adds mapped array of cronId and it's next timestep (time at which next execution will occur for this cron) in cron-schedule.ini*/
-    public function setCronSchedule($cron, $prev_time=null)
+    public function setCronSchedule($cron, $prev_ts=false)
     {
-        $next = self::cronGetNextTime($cron, $prev_time);
+        $cron = self::cronTrimEnds($cron);
+        echo "\r\n".'Setting nextSchedule for cron: '.$cron.' has prevTime:'.date('Y-m-d h:i:s',$prev_ts);
+        $next = self::cronGetNextTime($cron, $prev_ts);
+        echo "\r\n".'Next schedule for cron is at:'.date('Y-m-d h:i:s',$next);
         $cronId = self::getCronId($cron);
         if($cronId)
         {
@@ -89,14 +98,39 @@ class Cron
             $str = '';
             foreach($schedule as $cronId=>$ts)
                 $str .= "$cronId = $ts"."\r\n";
-            file_put_contents('data/cron-schedule.ini',$str);
+            file_put_contents('data/cron-schedule.ini',rtrim($str,"\r\n"));
         }
     }
 
-    public function getCronId($cron)
+    public function cronGetNextTime($cron, $prev_ts=null)
     {
-        $list = self::getMappingList();
-        return !empty($list[$cron]) ?$list[$cron] :null;
+        echo "\r\n".'Getting nextSchedule for cron: '.$cron;
+        $temp = explode(' ', $cron);
+
+        $time['min']        = $temp[0];
+        $time['hour']       = $temp[1];
+        $time['day']        = $temp[2];
+        $time['month']      = $temp[3];
+        $time['weekday']    = $temp[4];
+        $time['year']       = $temp[5];
+
+        $next = $prev_ts ?strtotime('+1 minute', $prev_ts) :strtotime(date('Y-m-d h:i:s'));
+        //for any of the bits, do nothing for JUST recursive bits
+        foreach($time as $type=>$bit)
+        {
+            if($type!='year')
+            {
+                $temp = self::getTimeFromBit($bit, $type, $next);
+                echo "\r\n".'Time after processing bit:'.$type.':'.date('Y-m-d h:i:s',$temp);
+                $next = $temp;
+            }
+        }
+        /* if(date('Y-m-d h:i:s', $next) <= date('Y-m-d h:i:s'))//if $next minute is smaller than current time
+            $next = strtotime('+1 minute', $next); */
+        // $next = date('Y-m-d h:i', $next);
+        //echo "\r\n".'>Returning next:'.date('Y-m-d h:i:s', $next);
+        $next = strtotime(date('Y-m-d h:i', $next));//round off the time
+        return $next;
     }
 
     public function getTimeFromBit($bit, $type, $next)
@@ -137,42 +171,31 @@ class Cron
                 $ts = $max - $current + $range[0];//eg, (7-6)+2 for a range 2-4 and weekday as 6
             else
                 $ts = 0;
+            echo "\r\n".'Setting next bit for '.$type.':'.($ts>0 ?"+$ts $type to ".date('Y-m-d h:i:s') :'');
             $next = $ts >0 ?strtotime("+$ts $type", $next) :$next;
         }
-        else if($bit = self::isAlteringBit($bit))
+        else if($gap = self::isRepeativeBit($bit))
         {
-            $ts = $max - $current + $bit;//eg, (7-6)+2 for a alternate bit of */2 and weekday as 6
-            $next = $ts>0 ?strtotime("+$ts $type", $next) :$next;
+            echo "\r\n".'It was a repeative bit ('.$bit.') for type:'.$type.' '.$gap;
+            if(self::isRecursiveBit($bit))
+            {
+                echo "\r\n".'Setting next bit for '.$type.':'.($gap>0 ?"+$gap $type to ".date('Y-m-d h:i:s',$next) :'').' >';
+                $next = $gap>0 ?strtotime("+$gap $type", $next) :$next;
+                echo date('Y-m-d h:i:s', $next);
+            }
+            else
+            {
+                $ts = $max - $current + $gap;//eg, (7-6)+2 for a alternate bit of */2 and weekday as 6
+                $next = $ts>0 ?strtotime("+$ts $type", $next) :$next;
+            }
         }
         return $next;
     }
 
-    public function cronGetNextTime($cron, $prev_time=null)
+    public function getCronId($cron)
     {
-        echo "\r\n".'Getting nextSchedule for cron:'.$cron;
-        $temp = explode(' ', $cron);
-
-        $time['min']        = $temp[0];
-        $time['hour']       = $temp[1];
-        $time['day']        = $temp[2];
-        $time['month']      = $temp[3];
-        $time['weekday']    = $temp[4];
-        $time['year']       = $temp[5];
-
-        $next = $prev_time ?strtotime('+1 minute', $prev_time) :strtotime(date('Y-m-d h:i:s'));
-        //for any of the bits, do nothing for JUST recursive bits
-        foreach($time as $type=>$bit)
-        {
-            if($type!='year')
-            {
-                $next = self::getTimeFromBit($bit, $type, $next);
-            }
-        }
-        /* if(date('Y-m-d h:i:s', $next) <= date('Y-m-d h:i:s'))//if $next minute is smaller than current time
-            $next = strtotime('+1 minute', $next); */
-        // $next = date('Y-m-d h:i', $next);
-        echo "\r\n".'>Returning next:'.date('Y-m-d h:i:s', $next);
-        return $next;
+        $list = self::getMappingList();
+        return !empty($list[$cron]) ?$list[$cron] :null;
     }
 
     public function cronSetLog($cronId, $log)
@@ -210,6 +233,7 @@ class Cron
 
     public function getExecutableCron($cron)
     {
+        $cron = self::cronTrimEnds($cron);
         $cron = preg_replace("/\\+/","\\\\\\\\", $cron);//double-escape the backslashes: once for PHP and once for the shell.
         $cron = explode(' ', $cron);
         $temp = [];
@@ -218,8 +242,13 @@ class Cron
             $temp[] = $cron[$i];
         $cron = join(' ', $temp);
         $cron = trim($cron);
-        $cron = trim($cron,"'");
-        $cron = trim($cron,"'");
+        return $cron;
+    }
+    
+    public function cronTrimEnds($cron)
+    {
+        $cron = trim($cron, "'");
+        $cron = trim($cron, '"');
         return $cron;
     }
 
@@ -246,13 +275,13 @@ class Cron
     {
         if(!file_exists('data/map.ini'))
         {
-            echo "\r\n".'Mapping file missing. Creating new';
+           // echo "\r\n".'Mapping file missing. Creating new';
             @mkdir('data',0777,true);
             file_put_contents('data/map.ini','');
         }
         if(!count(self::$mappings))
         {
-            echo "\r\n".'Mapping list is empty. Getting list from file:';            
+            //echo "\r\n".'Mapping list is empty. Getting list from file:';            
             $mappings = parse_ini_file('data/map.ini');
             self::$mappings = !count($mappings) ?[] :$mappings;
             print_r(self::$mappings);
@@ -271,30 +300,26 @@ class Cron
         file_put_contents('data/status.ini', "ts = ".$now);
         
         $mtime = filemtime('php/crontab.php');
-        // echo "\r\n".'Current time:'.$now.', modified time:'.$crons_mtime.': current >'.date('Y-m-d h:i:s', $now).', mtime:'.date('Y-m-d h:i:s', $crons_mtime);
         //cron file updated; add schedule for new crons
-        echo "\r\n".'Mappings list:'."\r\n".print_r(self::$mappings, true);
         if(date('Y-m-d h:i',strtotime("+1 minute", $mtime)) >= date('Y-m-d h:i',$now) || !count(self::$mappings))
         {
-            echo "\r\n".(date('Y-m-d h:i',strtotime("+1 minute", $mtime)) >= date('Y-m-d h:i',$now) ?'Crontab was updated' :'Mappings list was empty');
             $added_crons = self::createMappingList($get_new=true);
             echo "\r\n".'Added cron:'.print_r($added_crons, true);
             foreach($added_crons as $cron=>$id)
             {
-                self::setCronSchedule($cron);
+                self::setCronSchedule($cron, $now);
             }
         }
-        $crons = self::getScheduledCrons();
+        $crons = self::getScheduledCrons($now);
         echo "\r\n".'Scheduled crons:'.print_r($crons,true);
 
         $now = date('Y-m-d h:i:s');
-        echo "\r\n"."[$now] Cron list started"."\r\n";
-        foreach($crons as $id=>$cron)
+        echo "\r\n\r\n"."[$now] Cron list started"."\r\n";
+        foreach($crons as $cron_id=>$ts)
         {
-            $cron = trim($cron,"'");
-            $cron = trim($cron,"'");
-            $prev_time = self::cronExecute($cron);
-            self::setCronSchedule($cron, $prev_time);
+            $cron = array_search($cron_id, self::$mappings);
+            self::cronExecute($cron);
+            self::setCronSchedule($cron, $ts);
         }
         $now = date('Y-m-d h:i:s');
         echo "\r\n"."[$now] Cron list ended"."\r\n";
